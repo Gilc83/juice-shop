@@ -23,6 +23,7 @@ export class ErrorPageComponent implements OnInit {
   private readonly translate = inject(TranslateService);
 
   public error: string | null = null
+  JSON = JSON;
 
   ngOnInit (): void {
     const errorKey = this.route.snapshot.queryParams.error

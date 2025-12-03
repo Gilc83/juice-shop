@@ -35,6 +35,7 @@ export class DataExportComponent implements OnInit {
   private dataRequest: any = undefined
   public confirmation: any
   public error: any
+  JSON = JSON;
   public lastSuccessfulTry: any
   public presenceOfCaptcha = false
   public userData: any
