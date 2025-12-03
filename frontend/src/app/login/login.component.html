@@ -10,7 +10,7 @@
       <h1>Login</h1>
 
       @if (error) {
-      <div class="error">{{error | json}}</div>
+      <div class="error">{{JSON.stringify(error, null, 2)}}</div>
       }
 
       <div class="form-container" id="login-form">
