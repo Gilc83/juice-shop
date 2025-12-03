@@ -10,7 +10,7 @@
 
       @if (error) {
         <div>
-          <p class="error">{{error | json}}</p>
+          <p class="error">{{JSON.stringify(error, null, 2)}}</p>
         </div>
       }
 

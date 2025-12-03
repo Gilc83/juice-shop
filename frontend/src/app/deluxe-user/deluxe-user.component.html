@@ -5,7 +5,7 @@
 
 @if (error) {
   <div class="heading mat-elevation-z6">
-    <span class="error">{{error | json}}</span>
+    <span class="error">{{JSON.stringify(error, null, 2)}}</span>
   </div>
 }
 
