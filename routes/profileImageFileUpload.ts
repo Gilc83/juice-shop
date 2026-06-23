@@ -47,7 +47,7 @@ export function profileImageFileUpload () {
       return
     }
 
-    const filePath = `frontend/dist/frontend/assets/public/images/uploads/${loggedInUser.data.id}.${uploadedFileType.ext}`
+    const filePath = `frontend/dist/frontend/assets/public/images/uploads/${loggedInUser.data.id}.${ext}`
     try {
       await fs.writeFile(filePath, buffer)
     } catch (err) {
@@ -57,7 +57,7 @@ export function profileImageFileUpload () {
     try {
       const user = await UserModel.findByPk(loggedInUser.data.id)
       if (user != null) {
-        await user.update({ profileImage: `assets/public/images/uploads/${loggedInUser.data.id}.${uploadedFileType.ext}` })
+        await user.update({ profileImage: `assets/public/images/uploads/${loggedInUser.data.id}.${ext}` })
       }
     } catch (error) {
       next(error)
