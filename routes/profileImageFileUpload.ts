@@ -37,8 +37,7 @@ export function profileImageFileUpload () {
     }
     if (!utils.startsWith(mime, 'image')) {
         res.status(415)
-        next(new Error(`Profile image upload does not accept this file type:
-        {mime}`))
+        next(new Error(`Profile image upload does not accept this file type: ${mime}`))
         return
     }
     const loggedInUser = security.authenticatedUsers.get(req.cookies.token)
