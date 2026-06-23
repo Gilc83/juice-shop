@@ -22,15 +22,24 @@ export function profileImageFileUpload () {
       return
     }
     const uploadedFileType = await fileType.fromBuffer(buffer)
-    if (uploadedFileType === undefined) {
-      res.status(500)
-      next(new Error('Illegal file type'))
-      return
+    // INTENTIONAL VULN (SVG-upload stored-XSS testing): file-type returns undefined
+    // for SVG (XML text, no binary signature). Accept a buffer that looks like SVG
+    // as image/svg+xml so it is stored + served inline → its <script> executes.
+    const looksLikeSvg =
+       uploadedFileType === undefined &&
+       buffer.subarray(0, 1024).toString('utf8').toLowerCase().includes('<svg')
+    const ext = looksLikeSvg ? 'svg' : uploadedFileType?.ext
+    const mime = looksLikeSvg ? 'image/svg+xml' : uploadedFileType?.mime
+    if (ext === undefined || mime === undefined) {
+        res.status(500)
+        next(new Error('Illegal file type'))
+        return
     }
-    if (uploadedFileType === null || !utils.startsWith(uploadedFileType.mime, 'image')) {
-      res.status(415)
-      next(new Error(`Profile image upload does not accept this file type${uploadedFileType ? (': ' + uploadedFileType.mime) : '.'}`))
-      return
+    if (!utils.startsWith(mime, 'image')) {
+        res.status(415)
+        next(new Error(`Profile image upload does not accept this file type:
+        {mime}`))
+        return
     }
     const loggedInUser = security.authenticatedUsers.get(req.cookies.token)
     if (!loggedInUser) {
