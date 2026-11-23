@@ -1,0 +1,718 @@
+JUICE SHOP GOLD RUN — 23.11.26 (2026-11-23)
+====================================================================================================
+
+What this file is
+-----------------
+The reference result a Sileo scan of the Juice Shop test target must reproduce. It lists every finding
+of the gold run below in full: the 31 findings that must all be present, the id22 "target
+unavailability" findings (any subset of five known endpoints), and the Informative extras the run also
+carried. Use it to judge a scan run end to end in AWS, with both the scanner and the target running in
+the cloud.
+
+Source run
+----------
+  Run folder:   artifactStore/fieldRuns/localhost_8130/2026-11-23_13-44-45 (in the Sileo repo, untracked)
+  Scan id:      mwt4tgzq
+  Started:      2026-11-23 10:37:27 UTC     Report written: 2026-11-23 13:44:45 UTC (3 h 07 m)
+  Sileo build:  677f6a40 (HEAD of the Sileo repo when the scan started)
+  Verdict:      GOLD. 31/31 reference findings, 5 id22 on known endpoints, 3 Informative extras.
+                39 findings in total.
+  Comparison baseline: Sileo run 2026-11-13_17-54-49 (the set the gold check compares against). Earlier gold runs on the same target: 2026-11-21_20-08-20,
+                2026-11-22_04-40-57, 2026-11-22_08-08-41.
+
+The target: which Juice Shop
+----------------------------
+  Repository:   https://github.com/Gilc83/juice-shop, branch master, commit 8d5011935 or later
+                (OWASP Juice Shop 19.1.1 plus Sileo test changes: detailed error pages, SVG uploads
+                accepted, profile-image extension handling).
+  The local reference container is Juiceshop-DetailedErrors-8130, image
+  juice-shop-local-errors-fileupload:latest, built 2026-06-23 from commit c5b0cf6ea. On 2026-11-23
+  its source was compared file by file with GitHub master. They differed in one line: master had a
+  2026-07-05 commit (2e582532a) that replaces CR/LF in the username on /profile. The container never
+  had that change, and gold finding F010 below (A5 on POST /profile [username], a 500 caused by a
+  carriage return) depends on its absence. Commit 8d5011935 reverts it, so master now builds the same
+  source tree as the container: 0 lines of difference with c5b0cf6ea. The only remaining differences
+  are files the Dockerfile leaves out (tests, screenshots, vagrant) or that the app generates at
+  start-up (i18n, the SQLite database, the SBOM).
+  Do NOT build from a commit that has 2e582532a without its revert, because F010 would be lost.
+
+Setting up the target in AWS
+----------------------------
+  git clone https://github.com/Gilc83/juice-shop.git && cd juice-shop
+  docker build -t juice-shop-local-errors-fileupload .
+  docker run -d --name Juiceshop-DetailedErrors-8130 --restart unless-stopped -p 8130:3000 \
+      juice-shop-local-errors-fileupload
+
+  - --restart unless-stopped is REQUIRED. Several requests in the scan end the Juice Shop process
+    (the id22 and id50 findings). The local container comes back by itself because of this policy
+    (it restarted twice during the gold run). Without it, the target stays down after the first crash
+    and everything after it is lost.
+  - Juice Shop rebuilds its database every time it starts, so a restart gives the scan a fresh
+    application. The local scan restarts the container before it starts. In AWS, do the same
+    (preRunCommand below, or by hand).
+  - Any host or port works. The keys below compare paths with the origin stripped.
+
+Scanner settings used (runconfig target "juiceshop")
+---------------------------------------------------
+  url:            http://localhost:8130/          (in AWS: the target's URL)
+  loginUrl:       http://localhost:8130/#/login
+  credentials:    the Juice Shop administrator account (admin@juice-sh.op and its password)
+  scanProfile:    nonProdProtectAndReport
+  preRunCommand:  docker restart Juiceshop-DetailedErrors-8130
+  Local AI:       ON in this run (Ollama, crawl phase only). The no-model reference run
+                  (2026-11-13_17-54-49) also reached all 31, so the model is not required for gold.
+
+How to judge an AWS run against this file
+-----------------------------------------
+Compare SETS, never counts. Key each finding as (vulnerability id, METHOD, path, param, rule):
+  - strip the origin from the path (several findings record an absolute URL such as
+    http://localhost:8130/rest/chatbot/respond; in AWS it will carry the AWS host), and
+  - normalise path templates: {__sileoVirtualParam1}, {id} etc. all compare as {id}.
+Every finding in PARTS A-C shows its key in this form on its "Key:" line.
+
+  Rule 1 (the gate): all 31 findings of PART A are present.
+  Rule 2: id22 appears only on these five endpoints, any subset of them, each with confidence
+          "confirmed" and a detail that describes the solo re-send:
+            DELETE /api/Addresss/{id}     DELETE /api/Cards/{id}     PUT /rest/wallet/balance
+            GET /api/Cards/{id}           POST /rest/basket/{id}/checkout
+          Which of them convict varies from run to run. A conviction needs the application to die
+          while exactly that request is in flight alone. A missing id22 endpoint is run variance, not
+          a regression. This run convicted all five.
+  Anything else needs an explanation before the run is called gold. The PART C extras already have
+  one:
+    - id50 DELETE /api/Addresss/{id} (Informative): deleting an address hits a foreign-key error,
+      and Juice Shop ends its own process. The request is one the application's own feature sends,
+      with no value changed. Also in the 2026-11-21 and 2026-11-22 gold runs.
+    - id50 POST /rest/basket/{id}/checkout (Informative): an ordinary checkout, sent by the
+      application's own frontend, also ends the process. Also in the 2026-11-22 gold runs.
+    - id33 PUT /rest/wallet/balance [balance] (Informative, writes no rule): a NUL in the balance
+      gets the application's own 404, so the application validates it. First seen in this run.
+
+Known variance and host-dependent details
+-----------------------------------------
+  - Absolute URLs and the client IP inside Juice Shop's error page ("Blocked illegal activity by
+    ::ffff:172.17.0.1") will differ in AWS. Only the keys matter.
+  - /api/Challenges/ (A5, F014): the report can spell this path with or without the trailing slash.
+    The reference holds one of the two spellings.
+  - POST /rest/memories [image]: the gold finding is id13 Insecure File Upload (F019), plus id40 on the
+    same endpoint (F035). Before 2026-11-13, runs sometimes reported id38 there instead of id13.
+  - POST /api/Feedbacks/: the crawl usually answers the captcha wrong, so the recorded request is a
+    401. id6 (F008, a NUL in captchaId answers 500 where every other probe answers 401) is measured
+    against that refusal. id24 (F028) and id29 (F030) come from the stored-write coverage that revives
+    the request from the captcha the application publishes.
+  - The chatbot (/rest/chatbot/respond) findings depend on the conversation state, which makes them
+    the most fragile members of the set. They are F002, F009, F020 and F027.
+  - The crawl recycled its browser 3 times in this run (scope notes). That did not cost any finding.
+  - Run time depends on the host. Locally the crawl plus fuzz took 3 h 07 m.
+
+Masking in this file
+--------------------
+Authorization and Cookie headers, JWTs, session tokens and passwords are masked. The excerpts are
+clipped. The full request and response files are in each finding's "Evidence:" folder, relative to
+the source run folder in the Sileo repo.
+
+====================================================================================================
+PART A — THE 31 GOLD FINDINGS (every one must be present)
+====================================================================================================
+
+1. F001  id1 Server-side Code/Expression Injection (SQL, JS or other)
+   Key:        (1, POST, /rest/user/login, email, A4)
+   Severity:   Critical   OWASP: A05:2025   Confidence: confirmed
+   Endpoint:   POST /rest/user/login   param: email   rule: A4
+   Detail:     SQL/SSTI signature detected; sanitizer applies replacements + denylist as appropriate
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      POST http://localhost:8130/rest/user/login
+      content-type: application/json
+      
+      {"email":"admin@ju'+ice-sh.op","password":"***"}
+   Trigger response:
+      HTTP 500
+      { "error": { "message": "SQLITE_ERROR: near \"' AND password = '\": syntax error", "stack": "Error\n at Database.<anonymous> (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:185:27)\n at /juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:50\n at new Promise (<anonymous>)\n at Query.run (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:12)\n at /j …[710 more chars]
+   Evidence:   evidence/F001_server-side-code-expression-in_A4_rest-user-login
+
+2. F002  id1 Server-side Code/Expression Injection (SQL, JS or other)
+   Key:        (1, POST, /rest/chatbot/respond, query, A4)
+   Severity:   Critical   OWASP: A05:2025   Confidence: confirmed
+   Endpoint:   POST /rest/chatbot/respond   param: query   rule: A4
+   Detail:     SQL/SSTI signature detected; sanitizer applies replacements + denylist as appropriate
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      POST http://localhost:8130/rest/chatbot/respond
+      content-type: application/json
+      
+      {"action":"setname","query":"Im sorry I didnt get your name. What shall I c\"+all you adminjuice-sh.op true 14:30 ff0000"}
+   Trigger response:
+      HTTP 500
+   Evidence:   evidence/F002_server-side-code-expression-in_A4_rest-chatbot-respond
+
+3. F003  id1 Server-side Code/Expression Injection (SQL, JS or other)
+   Key:        (1, GET, /rest/products/search, q, A4)
+   Severity:   Critical   OWASP: A05:2025   Confidence: confirmed
+   Endpoint:   GET /rest/products/search   param: q   rule: A4
+   Detail:     SQL/SSTI signature detected; sanitizer applies replacements + denylist as appropriate
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      GET http://localhost:8130/rest/products/search?q='%7C%7C
+   Trigger response:
+      HTTP 500
+      { "error": { "message": "SQLITE_ERROR: near \"%\": syntax error", "stack": "Error: SQLITE_ERROR: near \"%\": syntax error", "errno": 1, "code": "SQLITE_ERROR", "sql": "SELECT * FROM Products WHERE ((name LIKE '%'||%' OR description LIKE '%'||%') AND deletedAt IS NULL) ORDER BY name" } }
+   Evidence:   evidence/F003_server-side-code-expression-in_A4_rest-products-search
+
+4. F004  id3 Cross-Site Scripting (XSS) — HTML Injection
+   Key:        (3, POST, /profile, username, C1)
+   Severity:   High   OWASP: A05:2025   Confidence: (not stated)
+   Endpoint:   POST /profile   param: username   rule: C1
+   Detail:     Cross-Site Scripting via the '<' character reflected into an executable context
+   Status:     baseline 200  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/profile
+      
+      email=admin%40juice-sh.op&username=Im%20sorry%20I%20didnt%20get%20your%20name.%20What%20shall%20I%3Ca%20href%3D%22sileo02y12q%22%3Ex%3C%2Fa%3E%3Cimg%20src%3D%22sileo02y12q%22%3E%3Ciframe%20src%3D%22sileo02y12q%22%3E%3C%2Fiframe%3E%20call%20you%20adminjuice-sh.op%20true%2014%3A30%20ff0000
+   Trigger response:
+      HTTP 200
+      <!DOCTYPE html><html lang="en"><head><title>OWASP Juice Shop</title><meta charset="utf-8"><meta name="description" content=""><meta name="keywords" content=""><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="icon" type="image/x-icon" href="./assets/public/favicon_js.ico"><link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.min.css"><link rel="styleshee …[6101 more chars]
+   Evidence:   evidence/F004_cross-site-scripting-xss-html_C1_profile
+
+5. F005  id3 Cross-Site Scripting (XSS) — HTML Injection
+   Key:        (3, GET, /#/search, q, C1)
+   Severity:   High   OWASP: A05:2025   Confidence: (not stated)
+   Endpoint:   GET /#/search   param: q   rule: C1
+   Detail:     Cross-Site Scripting — HTML Injection via hash param, denylistedValue '<'
+   Status:     baseline 200  ->  trigger -
+   Trigger request:
+      GET http://localhost:8130/#/search?q=fr%3Csileo0ylal9%3Eom
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F005_cross-site-scripting-xss-html_C1_search
+
+6. F006  id4 Cross-Site Scripting (XSS) — Attribute Injection
+   Key:        (4, POST, /profile/image/url, imageUrl, C1)
+   Severity:   High   OWASP: A05:2025   Confidence: (not stated)
+   Endpoint:   POST /profile/image/url   param: imageUrl   rule: C1
+   Detail:     Cross-Site Scripting via the 'javascript:' character reflected into an executable context
+   Status:     baseline 200  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/profile/image/url
+      
+      imageUrl=javascript%3Asileo02n2iv
+   Trigger response:
+      HTTP 200
+      <!DOCTYPE html><html lang="en"><head><title>OWASP Juice Shop</title><meta charset="utf-8"><meta name="description" content=""><meta name="keywords" content=""><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="icon" type="image/x-icon" href="./assets/public/favicon_js.ico"><link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.min.css"><link rel="styleshee …[5889 more chars]
+   Evidence:   evidence/F006_cross-site-scripting-xss-attri_C1_profile-image-url
+
+7. F007  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, POST, /rest/user/login, email, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   POST /rest/user/login   param: email   rule: A5
+   Detail:     Forbidden characters for this param (sanitizer denylists them): \0 (NUL)
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      POST http://localhost:8130/rest/user/login
+      content-type: application/json
+      
+      {"email":"admin@ju\u0000ice-sh.op","password":"***"}
+   Trigger response:
+      HTTP 500
+      { "error": { "message": "SQLITE_ERROR: unrecognized token: \"'admin@ju\"", "stack": "Error\n at Database.<anonymous> (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:185:27)\n at /juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:50\n at new Promise (<anonymous>)\n at Query.run (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:12)\n at /juice-sho …[714 more chars]
+   Evidence:   evidence/F007_generic-anomaly-special-charac_A5_rest-user-login
+
+8. F008  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, POST, /api/Feedbacks/, captchaId, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   POST /api/Feedbacks/   param: captchaId   rule: A5
+   Detail:     Characters this parameter mishandles, REPORTED but NOT enforced: \0 (NUL). The enforced type (integer) rejects any value carrying them, so the sanitizer already blocks these payloads at runtime and no denylist rule is written. Detected because this scan was asked to probe past the type enforcement; a scan building a policy would not have sent them at all.
+   Status:     baseline 401  ->  trigger 500
+   Trigger request:
+      POST http://localhost:8130/api/Feedbacks/
+      content-type: application/json
+      
+      {"UserId":1,"captchaId":"\u00000","captcha":"12345","comment":"This is a great service, easy to use. (***in@juice-sh.op)","rating":1}
+   Trigger response:
+      HTTP 500
+      { "error": { "message": "SQLITE_ERROR: unrecognized token: \"'\"", "stack": "Error\n at Database.<anonymous> (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:185:27)\n at /juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:50\n at new Promise (<anonymous>)\n at Query.run (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:12)\n at /juice-shop/node_m …[1054 more chars]
+   Evidence:   evidence/F008_generic-anomaly-special-charac_A5_api-feedbacks
+
+9. F009  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, POST, /rest/chatbot/respond, query, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   POST /rest/chatbot/respond   param: query   rule: A5
+   Detail:     Forbidden characters for this param (sanitizer denylists them): \r (carriage return) \n (newline)
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      POST http://localhost:8130/rest/chatbot/respond
+      content-type: application/json
+      
+      {"action":"setname","query":"Im sorry I didnt get your name. What shall I c\rall you adminjuice-sh.op true 14:30 ff0000"}
+   Trigger response:
+      HTTP 500
+   Evidence:   evidence/F009_generic-anomaly-special-charac_A5_rest-chatbot-respond
+
+10. F010  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, POST, /profile, username, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   POST /profile   param: username   rule: A5
+   Detail:     Forbidden characters for this param (sanitizer denylists them): \r (carriage return) \n (newline)
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      POST http://localhost:8130/profile
+      content-type: application/x-www-form-urlencoded
+      
+      email=admin%40juice-sh.op&username=Im%20sorry%20I%20didnt%20get%20your%20name.%20What%20shall%20I%20c%0Dall%20you%20adminjuice-sh.op%20true%2014%3A30%20ff0000
+   Trigger response:
+      HTTP 500
+      <html> <head> <meta charset='utf-8'> <title>Error: Blocked illegal activity by ::ffff:172.17.0.1</title> <style>* { margin: 0; padding: 0; outline: 0; } body { padding: 80px 100px; font: 13px "Helvetica Neue", "Lucida Grande", "Arial"; background: #ECE9E9 -webkit-gradient(linear, 0% 0%, 0% 100%, from(#fff), to(#ECE9E9)); background: #ECE9E9 -moz-linear-gradient(top, #fff, #ECE9E9); background-repe …[559 more chars]
+   Evidence:   evidence/F010_generic-anomaly-special-charac_A5_profile
+
+11. F011  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, POST, /profile/image/url, imageUrl, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   POST /profile/image/url   param: imageUrl   rule: A5
+   Detail:     Forbidden characters for this param (sanitizer denylists them): \f (form feed) \r (carriage return) \n (newline) \0 (NUL)
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      POST http://localhost:8130/profile/image/url
+      content-type: application/x-www-form-urlencoded
+      
+      imageUrl=https%3A%2F%2Fexampl%0Ce.com%2Fimage.jpg
+   Trigger response:
+      HTTP 500
+      <html> <head> <meta charset='utf-8'> <title>Error: Blocked illegal activity by ::ffff:172.17.0.1</title> <style>* { margin: 0; padding: 0; outline: 0; } body { padding: 80px 100px; font: 13px "Helvetica Neue", "Lucida Grande", "Arial"; background: #ECE9E9 -webkit-gradient(linear, 0% 0%, 0% 100%, from(#fff), to(#ECE9E9)); background: #ECE9E9 -moz-linear-gradient(top, #fff, #ECE9E9); background-repe …[559 more chars]
+   Evidence:   evidence/F011_generic-anomaly-special-charac_A5_profile-image-url
+
+12. F012  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, GET, /rest/user/security-question, email, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   GET /rest/user/security-question   param: email   rule: A5
+   Detail:     Forbidden characters for this param (sanitizer denylists them): \0 (NUL)
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      GET http://localhost:8130/rest/user/security-question?email=user%40exa%00mple.com
+   Trigger response:
+      HTTP 500
+      { "error": { "message": "SQLITE_ERROR: unrecognized token: \"'user@exa\"", "stack": "Error\n at Database.<anonymous> (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:185:27)\n at /juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:50\n at new Promise (<anonymous>)\n at Query.run (/juice-shop/node_modules/sequelize/lib/dialects/sqlite/query.js:183:12)\n at /juice-sho …[3194 more chars]
+   Evidence:   evidence/F012_generic-anomaly-special-charac_A5_rest-user-security-quest
+
+13. F013  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, GET, /rest/products/search, q, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   GET /rest/products/search   param: q   rule: A5
+   Detail:     Forbidden characters for this param (sanitizer denylists them): \0 (NUL)
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      GET http://localhost:8130/rest/products/search?q=%00
+   Trigger response:
+      HTTP 500
+      { "error": { "message": "SQLITE_ERROR: unrecognized token: \"'%\"", "stack": "Error: SQLITE_ERROR: unrecognized token: \"'%\"", "errno": 1, "code": "SQLITE_ERROR", "sql": "SELECT * FROM Products WHERE ((name LIKE '%\u0000%' OR description LIKE '%\u0000%') AND deletedAt IS NULL) ORDER BY name" } }
+   Evidence:   evidence/F013_generic-anomaly-special-charac_A5_rest-products-search
+
+14. F014  id6 Generic Anomaly (Special Character Injection)
+   Key:        (6, GET, /api/Challenges/, name, A5)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   GET /api/Challenges/   param: name   rule: A5
+   Detail:     Forbidden characters for this param (sanitizer denylists them): \0 (NUL)
+   Status:     baseline 200  ->  trigger 500
+   Trigger request:
+      GET http://localhost:8130/api/Challenges/?name=Scor%00e%20Board
+   Trigger response:
+      HTTP 500
+      {"message":"internal error","errors":["SQLITE_ERROR: unrecognized token: \"'Scor\""]}
+   Evidence:   evidence/F014_generic-anomaly-special-charac_A5_api-challenges
+
+15. F015  id7 Missing HTTP Security Headers
+   Key:        (7, *, *, *, B2)
+   Severity:   Medium   OWASP: A02:2025   Confidence: (not stated)
+   Endpoint:   * *   param: *   rule: B2
+   Detail:     Missing HTTP security headers on localhost: Content-Security-Policy-Report-Only, Pragma, X-Permitted-Cross-Domain-Policies — absent from every response this scan checked for them (117 responses captured from this host). Set on some of localhost's responses and not others: Cache-Control (absent from 72 of 117), Content-Security-Policy (absent from 115 of 117), X-Content-Type-Options (absent from 3 of 117), X-Frame-Options (absent from 3 of 117) — whether a client is protected then depends on which response it received, so these are worth making uniform rather than read as present.
+   Status:     baseline 200  ->  trigger -
+   Baseline request:
+      GET http://localhost:8130/socket.io/?EIO=4&transport=polling&t=Q87-weI&sid=i-66iTuWyxnqj65NAAAA
+   Baseline response:
+      HTTP 200
+      6
+   Evidence:   evidence/F015_missing-http-security-headers_B2
+
+16. F016  id9 Insecure Communication Channel
+   Key:        (9, *, *, *, B1)
+   Severity:   Medium   OWASP: A02:2025   Confidence: (not stated)
+   Endpoint:   * *   param: *   rule: B1
+   Detail:     Host localhost is served over unencrypted HTTP and answers on no HTTPS interface
+   Status:     baseline 200  ->  trigger -
+   Baseline request:
+      POST http://localhost:8130/rest/user/login
+      content-type: application/json
+      
+      {"email":"admin@juice-sh.op","password":"***"}
+   Baseline response:
+      HTTP 200
+      {"authentication":{"token":"***","bid":1,"umail":"admin@juice-sh.op"}}
+   Evidence:   evidence/F016_insecure-communication-channel_B1
+
+17. F017  id10 Content-Security-Policy Should Be Customized
+   Key:        (10, *, *, *, B2)
+   Severity:   Informative   OWASP: A02:2025   Confidence: (not stated)
+   Endpoint:   * *   param: *   rule: B2
+   Detail:     Content-Security-Policy should be customized for localhost — Sileo's default ("object-src 'none'; base-uri 'self';") is intentionally minimal. Replace with a CSP tailored to the application's real script-src, style-src, connect-src, and frame-src needs.
+   Status:     baseline 200  ->  trigger -
+   Baseline request:
+      GET http://localhost:8130/socket.io/?EIO=4&transport=polling&t=Q87-weI&sid=i-66iTuWyxnqj65NAAAA
+   Baseline response:
+      HTTP 200
+      6
+   Evidence:   evidence/F017_content-security-policy-should_B2
+
+18. F018  id12 Unrestricted File Upload
+   Key:        (12, POST, /file-upload, file, A6)
+   Severity:   High   OWASP: A06:2025   Confidence: (not stated)
+   Endpoint:   POST /file-upload   param: file   rule: A6
+   Detail:     No file-type restriction was observed on this parameter: a benign type the interface never offers was accepted, and so was active markup uploaded under its own name and media type. The interface declares extensions [pdf, zip] and media types [application/pdf, application/zip] (from the interface's declared allowed-type set). Attributes validated — filename: ignored; declared media type: ignored; file content: ignored; a filename that reconfigures how the directory is served: ignored. Probes: accepted benign baseline (sileo3.pdf, application/pdf), HTML markup, honestly labelled (.html, text/html), SVG image markup (XML prolog), honestly labelled (.svg, image/svg+xml), SVG image markup (bare root element), honestly labelled (.svg, image/svg+xml), PHP server code, honestly labelled (.php, application/x-httpd-php), a harmless type the interface never offers (image/jpeg), benign content under a dangerous filename (.html), benign content declared as text/html, active markup behind the baseline's own name and media type, active markup named .html but declared application/pdf, a valid image whose bytes continue into active markup, named and declared as that image, an Apache per-directory c …[2430 more chars]
+   Status:     baseline 204  ->  trigger 204
+   Trigger request:
+      POST http://localhost:8130/file-upload
+      content-type: multipart/form-data; boundary=----WebKitFormBoundarywqkHte33LzBjPdPL
+      
+      ------WebKitFormBoundarywqkHte33LzBjPdPL
+      Content-Disposition: form-data; name="file"; filename="sileo.html"
+      Content-Type: text/html
+      
+      <!DOCTYPE html>
+      <html><head><title>sileo</title></head><body><p>sileo file-type probe</p><!-- sileo0ldi7pproof06v86d --></body></html>
+      
+      ------WebKitFormBoundarywqkHte33LzBjPdPL--
+   Trigger response:
+      HTTP 204
+   Evidence:   evidence/F018_unrestricted-file-upload_A6_file-upload
+
+19. F019  id13 Insecure File Upload
+   Key:        (13, POST, /rest/memories, image, A6)
+   Severity:   High   OWASP: A06:2025   Confidence: (not stated)
+   Endpoint:   POST /rest/memories   param: image   rule: A6
+   Detail:     Active markup was accepted with a filename of the uploader's choosing: the bytes and the name the request asked for both got through the gate. The name is what decides how the content is interpreted if it is ever served, which is why this ranks above an endpoint where only the bytes go unchecked. The bytes reached storage behind an allowed media type, under a filename the request chose. Whether this server stores what it accepted under the name it was given was not established here; what is reported is the gate, and the gate accepted both. The interface declares no allowed-type set. Attributes validated — filename: ignored; declared media type: checked; file content: ignored; a filename that reconfigures how the directory is served: checked. Probes: accepted benign baseline (Share a memory from your favorite childhood experience., image/jpeg), a harmless type the interface never offers (image/jpeg), benign content under a dangerous filename (.html), active markup behind the baseline's own name and media type, active markup named .html but declared image/jpeg, the antivirus test file, under the baseline's media type; refused HTML markup, honestly labelled (.html, text/html), SVG ima …[2290 more chars]
+   Status:     baseline 200  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/rest/memories
+      content-type: multipart/form-data; boundary=----WebKitFormBoundaryjEu08CC2Ow4KtYut
+      
+      ------WebKitFormBoundaryjEu08CC2Ow4KtYut
+      Content-Disposition: form-data; name="image"; filename="sileoprobexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.html"
+      Content-Type: image/jpeg
+      
+      <!DOCTYPE html>
+      <html><head><title>sileo</title></head><body><p>sileo file-type probe</p><!-- sileoFileExecProof --></body></html>
+      
+      ------WebKitFormBoundaryjEu08CC2Ow4KtYut
+      Content-Disposition: form-data; name="caption"
+      
+      Share a memory from your favorite childhood experience.
+      ------WebKitFormBoundaryjEu08CC2Ow4KtYut--
+   Trigger response:
+      HTTP 200
+      {"status":"success","data":{"id":17,"caption":"Share a memory from your favorite childhood experience.","imagePath":"assets/public/images/uploads/sileoprobexxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.html-1795438516134.jpg","UserId":1,"updatedAt":"2026-11-23T12:55:16.138Z","createdAt":"2026-11-23T12:55:16.138Z"}}
+   Evidence:   evidence/F019_insecure-file-upload_A6_rest-memories
+
+20. F020  id17 Possible Denial-of-Service
+   Key:        (17, POST, /rest/chatbot/respond, "", validation)
+   Severity:   Medium   OWASP: A10:2025   Confidence: (not stated)
+   Endpoint:   POST http://localhost:8130/rest/chatbot/respond   rule: validation
+   Detail:     A specific fuzzed value made this endpoint HANG (no response across the stepped 15/30/60s dispatch budgets), while the endpoint answered its baseline value normally on immediate re-fire. Possible value-triggered denial-of-service (e.g. ReDoS or an unbounded server-side operation) — reported, NOT enforced: a slow/absent response is not proof of a deliberately-blockable payload, so no input is denylisted. Investigate and reproduce.
+   Evidence:   evidence/F020_possible-denial-of-service_validation_http-localhost-8130-rest
+
+21. F026  id23 Open Redirect
+   Key:        (23, GET, /redirect?to=https://github.com/juice-shop/juice-shop, to, A3)
+   Severity:   Medium   OWASP: A01:2025   Confidence: probable
+   Endpoint:   GET http://localhost:8130/redirect?to=https://github.com/juice-shop/juice-shop   param: to   rule: A3
+   Detail:     Open redirect: the endpoint redirects to a URL taken from the "to" parameter — a browser navigation with an injected external URL LANDED off-site on example.com (reproduced on example.net). The destination IS validated, but by a substring test: the injected URL's host is the attacker's and the permitted address rides along inside it (https://example.com/?x=https://github.com/juice-shop/juice-shop), so the check passes and the redirect is granted to a host it was never meant to allow. An attacker can craft a link to this endpoint that sends victims to a phishing/malware site while appearing to originate from this host. REPORTED, NOT auto-enforced: forcing same-origin redirects could break legitimate external redirects (SSO / payment return URLs), so no destination-blocking rule is written — validate the redirect target against an allowlist server-side.
+   Evidence:   evidence/F026_open-redirect_A3_http-localhost-8130-redi
+
+22. F027  id24 Stored Cross-Site Scripting (XSS) — HTML Injection
+   Key:        (24, POST, /rest/chatbot/respond, query, A_C-sweep)
+   Severity:   Critical   OWASP: A05:2025   Confidence: probable
+   Endpoint:   POST http://localhost:8130/rest/chatbot/respond   param: query   rule: A_C-sweep
+   Detail:     Stored Cross-Site Scripting — HTML Injection: a value written to "query" of POST http://localhost:8130/rest/chatbot/respond was persisted and later rendered on the decoupled reader page http://localhost:8130/profile. PAYLOAD WRITTEN: <a href="sileo0da9sv">x</a><img src="sileo0da9sv"><iframe src="sileo0da9sv"></iframe> <b>sileo09l4th</b> — OBSERVED ON THE PAGE: <a href="sileo0da9sv">x</a> (uniquely-keyed marker sileo0da9sv, detected via dom-structural). An attacker can persist this payload so it renders/executes for every user who views http://localhost:8130/profile. The injection substring to strip on the ACCEPTING endpoint is "<".
+   Status:     baseline -  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/profile
+      
+      <a href="sileo0da9sv">x</a><img src="sileo0da9sv"><iframe src="sileo0da9sv"></iframe> <b>sileo09l4th</b>
+   Trigger response:
+      HTTP 200
+      <a href="sileo0da9sv">x</a>
+   Evidence:   evidence/F027_stored-cross-site-scripting-xs_A_C-sweep_http-localhost-8130-rest
+
+23. F028  id24 Stored Cross-Site Scripting (XSS) — HTML Injection
+   Key:        (24, POST, /api/Feedbacks/, comment, A_C-sweep)
+   Severity:   Critical   OWASP: A05:2025   Confidence: probable
+   Endpoint:   POST http://localhost:8130/api/Feedbacks/   param: comment   rule: A_C-sweep
+   Detail:     Stored Cross-Site Scripting — HTML Injection: a value written to "comment" of POST http://localhost:8130/api/Feedbacks/ was persisted and later rendered on the decoupled reader page http://localhost:8130/#/about. PAYLOAD WRITTEN: <a href="sileo0j8tdz">x</a><img src="sileo0j8tdz"><iframe src="sileo0j8tdz"></iframe> <b>sileo0hr2vc</b> — OBSERVED ON THE PAGE: <a href="sileo0j8tdz">x</a> (uniquely-keyed marker sileo0j8tdz, detected via dom-structural). An attacker can persist this payload so it renders/executes for every user who views http://localhost:8130/#/about. The injection substring to strip on the ACCEPTING endpoint is "<".
+   Status:     baseline -  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/#/about
+      
+      <a href="sileo0j8tdz">x</a><img src="sileo0j8tdz"><iframe src="sileo0j8tdz"></iframe> <b>sileo0hr2vc</b>
+   Trigger response:
+      HTTP 200
+      <a href="sileo0j8tdz">x</a>
+   Evidence:   evidence/F028_stored-cross-site-scripting-xs_A_C-sweep_http-localhost-8130-api
+
+24. F029  id24 Stored Cross-Site Scripting (XSS) — HTML Injection
+   Key:        (24, POST, /profile, username, A_C-sweep)
+   Severity:   Critical   OWASP: A05:2025   Confidence: probable
+   Endpoint:   POST http://localhost:8130/profile   param: username   rule: A_C-sweep
+   Detail:     Stored Cross-Site Scripting — HTML Injection: a value written to "username" of POST http://localhost:8130/profile was persisted and later rendered on the decoupled reader page http://localhost:8130/profile. PAYLOAD WRITTEN: <a href="sileo0nmkha">x</a><img src="sileo0nmkha"><iframe src="sileo0nmkha"></iframe> <b>sileo04lvnh</b> — OBSERVED ON THE PAGE: <a href="sileo0nmkha">x</a> (uniquely-keyed marker sileo0nmkha, detected via dom-structural). An attacker can persist this payload so it renders/executes for every user who views http://localhost:8130/profile. The injection substring to strip on the ACCEPTING endpoint is "<".
+   Status:     baseline -  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/profile
+      
+      <a href="sileo0nmkha">x</a><img src="sileo0nmkha"><iframe src="sileo0nmkha"></iframe> <b>sileo04lvnh</b>
+   Trigger response:
+      HTTP 200
+      <a href="sileo0nmkha">x</a>
+   Evidence:   evidence/F029_stored-cross-site-scripting-xs_A_C-sweep_http-localhost-8130-prof
+
+25. F030  id29 Weak Human-Verification Challenge (CAPTCHA)
+   Key:        (29, POST, /api/Feedbacks/, "", challenge-revival)
+   Severity:   Medium   OWASP: A07:2025   Confidence: (not stated)
+   Endpoint:   POST http://localhost:8130/api/Feedbacks/   rule: challenge-revival
+   Detail:     This endpoint is protected by a human-verification challenge that does not provide the protection it implies: the application accepted the field "captcha" set to a value its own challenge response published under "answer" — the challenge discloses its solution, so no work is needed to defeat it; and the identical accepted request was accepted a second time — the challenge value is not consumed by use, so one solved challenge can be replayed indefinitely. Reported, NOT enforced — the weakness is in how the challenge is issued and checked, and no request-level rule can repair that without risking legitimate traffic that carries a valid answer.
+   Evidence:   evidence/F030_weak-human-verification-challe_challenge-revival_http-localhost-8
+
+26. F032  id35 Stored Cross-Site Scripting via File Upload
+   Key:        (35, POST, /profile/image/file, file, A6)
+   Severity:   Critical   OWASP: A05:2025   Confidence: (not stated)
+   Endpoint:   POST /profile/image/file   param: file   rule: A6
+   Detail:     Active markup was accepted with a filename of the uploader's choosing: the bytes and the name the request asked for both got through the gate. The name is what decides how the content is interpreted if it is ever served, which is why this ranks above an endpoint where only the bytes go unchecked. It needed no disguise at all: a dangerous type the interface never offers was accepted whole, with its own name, its own media type and its own content. Whether this server stores what it accepted under the name it was given was not established here; what is reported is the gate, and the gate accepted both. The interface declares media types [image/*] (from the interface's declared allowed-type set). Attributes validated — filename: ignored; declared media type: ignored; file content: checked; a filename that reconfigures how the directory is served: checked. Probes: accepted benign baseline (sileo1.jpg, image/jpeg), SVG image markup (bare root element), honestly labelled (.svg, image/svg+xml), benign content under a dangerous filename (.html), benign content declared as text/html, a valid image whose bytes continue into active markup, named and declared as that image; refused HTML markup, …[2650 more chars]
+   Status:     baseline 200  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/profile/image/file
+      content-type: multipart/form-data; boundary=----WebKitFormBoundaryu6ZhArBdyfvQzsuz
+      
+      ------WebKitFormBoundaryu6ZhArBdyfvQzsuz
+      Content-Disposition: form-data; name="file"; filename="sileop.svg"
+      Content-Type: image/svg+xml
+      
+      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#888888"/><!-- sileo06uuwaproof0gxgh5 --></svg>
+      
+      ------WebKitFormBoundaryu6ZhArBdyfvQzsuz--
+   Trigger response:
+      HTTP 200
+      <!DOCTYPE html><html lang="en"><head><title>OWASP Juice Shop</title><meta charset="utf-8"><meta name="description" content=""><meta name="keywords" content=""><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="icon" type="image/x-icon" href="./assets/public/favicon_js.ico"><link rel="stylesheet" href="https://code.getmdl.io/1.3.0/material.min.css"><link rel="styleshee …[5901 more chars]
+   Evidence:   evidence/F032_stored-cross-site-scripting-vi_A6_profile-image-file
+
+27. F033  id37 File Uploads Are Not Malware-Scanned
+   Key:        (37, POST, /file-upload, file, A6)
+   Severity:   Medium   OWASP: A06:2025   Confidence: (not stated)
+   Endpoint:   POST /file-upload   param: file   rule: A6
+   Detail:     The industry-standard antivirus test file was accepted and stored by this upload, so no scan runs on the request path. Stated no more strongly than that: this scan could not fetch the stored file back, so scanning that happens asynchronously or at download time is not ruled out.
+   Status:     baseline 204  ->  trigger 204
+   Trigger request:
+      POST http://localhost:8130/file-upload
+      content-type: multipart/form-data; boundary=----WebKitFormBoundarywqkHte33LzBjPdPL
+      
+      ------WebKitFormBoundarywqkHte33LzBjPdPL
+      Content-Disposition: form-data; name="file"; filename="sileoeicarmwt9ql6s4.pdf"
+      Content-Type: application/pdf
+      
+      X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*
+      ------WebKitFormBoundarywqkHte33LzBjPdPL--
+   Trigger response:
+      HTTP 204
+   Evidence:   evidence/F033_file-uploads-are-not-malware-s_A6_file-upload
+
+28. F034  id39 Declared and Enforced Upload Restrictions Disagree
+   Key:        (39, POST, /file-upload, file, A6)
+   Severity:   Low   OWASP: A06:2025   Confidence: (not stated)
+   Endpoint:   POST /file-upload   param: file   rule: A6
+   Detail:     The interface's declared allowed-type set and the server's behaviour disagree: the server accepts [image/jpeg], which the interface never offers — the real upload surface is wider than the page suggests. The interface declares extensions [pdf, zip] and media types [application/pdf, application/zip] (from the interface's declared allowed-type set). The enforced restriction follows the interface's declaration.
+   Status:     baseline 204  ->  trigger -
+   Baseline request:
+      POST http://localhost:8130/file-upload
+      content-type: multipart/form-data; boundary=----WebKitFormBoundarywqkHte33LzBjPdPL
+      
+      ------WebKitFormBoundarywqkHte33LzBjPdPL
+      Content-Disposition: form-data; name="file"; filename="sileo3.pdf"
+      Content-Type: application/pdf
+      
+      %PDF-1.4
+      %����
+      1 0 obj
+      << /Type /Catalog /Pages 2 0 R >>
+      endobj
+      2 0 obj
+      << /Type /Pages /Kids [3 0 R] /Count 1 >>
+      endobj
+      3 0 obj
+      << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+      endobj
+      4 0 obj
+      << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+      endobj
+      5 0 obj
+      << /Length 135 >>
+      stream
+      BT /F1 16 Tf 72 720 Td (Sileo test document) Tj 0 -24 Td (A short text page for upload testing.) Tj 0 -24 Td (sileo027k7yproof07) Tj ET
+      endstream
+      endobj
+      xref
+      0 6
+      0000000000 65535 f 
+      0000000015 00000 n 
+      0000000 …[170 more chars]
+   Baseline response:
+      HTTP 204
+   Evidence:   evidence/F034_declared-and-enforced-upload-r_A6_file-upload
+
+29. F035  id40 Downloadable Potential Malware
+   Key:        (40, POST, /rest/memories, image, A6)
+   Severity:   High   OWASP: A06:2025   Confidence: (not stated)
+   Endpoint:   POST /rest/memories   param: image   rule: A6
+   Detail:     The industry-standard antivirus test file was accepted by this upload and then fetched back byte-intact. Nothing scanned it on the way in and nothing quarantined it afterwards, so this origin will serve content of an attacker's choosing to anyone given the link, carrying the origin's own identity.
+   Status:     baseline 200  ->  trigger 200
+   Trigger request:
+      POST http://localhost:8130/rest/memories
+      content-type: multipart/form-data; boundary=----WebKitFormBoundaryjEu08CC2Ow4KtYut
+      
+      ------WebKitFormBoundaryjEu08CC2Ow4KtYut
+      Content-Disposition: form-data; name="image"; filename="sileoeicarmwt9qgmp1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      Content-Type: image/jpeg
+      
+      X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*
+      ------WebKitFormBoundaryjEu08CC2Ow4KtYut
+      Content-Disposition: form-data; name="caption"
+      
+      Share a memory from your favorite childhood experience.
+      ------WebKitFormBoundaryjEu08CC2Ow4KtYut--
+   Trigger response:
+      HTTP 200
+      {"status":"success","data":{"id":20,"caption":"Share a memory from your favorite childhood experience.","imagePath":"assets/public/images/uploads/sileoeicarmwt9qgmp1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-1795438516416.jpg","UserId":1,"updatedAt":"2026-11-23T12:55:16.419Z","createdAt":"2026-11-23T12:55:16.419Z"}}
+   Evidence:   evidence/F035_downloadable-potential-malware_A6_rest-memories
+
+30. F036  id42 Insufficient Anti-Automation
+   Key:        (42, POST, /api/Users/, "", anti-automation)
+   Severity:   Medium   OWASP: A07:2025   Confidence: (not stated)
+   Endpoint:   POST http://localhost:8130/api/Users/   rule: anti-automation
+   Detail:     196 accounts were created through this endpoint, each with an address of the scan's own, and none of the scan's plain attempts was met with a challenge, a refusal or a slowdown: the last was still accepted after all the others. One client can keep creating accounts, which is what automated sign-up abuse relies on. Reported, not enforced: a rate limit or a challenge is the operator's to set, and no request-level rule can add one without blocking legitimate users.
+   Evidence:   evidence/F036_insufficient-anti-automation_anti-automation_http-localhost-8130
+
+31. F037  id42 Insufficient Anti-Automation
+   Key:        (42, POST, /rest/user/login, "", anti-automation)
+   Severity:   Medium   OWASP: A07:2025   Confidence: (not stated)
+   Endpoint:   POST http://localhost:8130/rest/user/login   rule: anti-automation
+   Detail:     One account received 20 wrong passwords through this endpoint, each answered as an ordinary wrong password with no lock, refusal or slowdown in the way, and the account still signed in with its own password afterwards. One client can keep trying passwords on an account, which is what password guessing relies on. The account was one the scan may lock out, never the configured one. Reported, not enforced: a rate limit or a challenge is the operator's to set, and no request-level rule can add one without blocking legitimate users.
+   Evidence:   evidence/F037_insufficient-anti-automation_anti-automation_http-localhost-8130
+
+====================================================================================================
+PART B — id22 OBSERVED TARGET UNAVAILABILITY (5 in this run; any subset of the five is gold)
+====================================================================================================
+
+1. F021  id22 Observed Target Unavailability (Possible Denial-of-Service)
+   Key:        (22, GET, /api/Cards/{id}, "", validation)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   GET /api/Cards/{__sileoVirtualParam1}   rule: validation
+   Detail:     GET http://localhost:8130/api/Cards/'%22%3C%3E%60%5C%24%7B%7B%7B%25s()%5B%5D%7B%7D%7C%26%24*%2B%3D%3A%2C.%2F%3F!%40%5E~_-%25%20..%2F%2F....%5C%5C..%3B%23%09%0C%0D%0A%00ileo7ab takes localhost:8130 down. It was in flight when the application stopped answering, and once the application answered again it was sent once more with nothing else in flight, and the application dropped its connection (apiRequestContext.fetch: socket hang up) and stopped answering. The request carries a value the application never sent, so anyone able to send this single request can deny service to every one of its users. The scan sent it no more, so this endpoint's parameters went unprobed — which particular character it dies on is not covered by this scan.
+   Status:     baseline -  ->  trigger -
+   Trigger request:
+      GET http://localhost:8130/api/Cards/'%22%3C%3E%60%5C%24%7B%7B%7B%25s()%5B%5D%7B%7D%7C%26%24*%2B%3D%3A%2C.%2F%3F!%40%5E~_-%25%20..%2F%2F....%5C%5C..%3B%23%09%0C%0D%0A%00ileo7ab
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F021_observed-target-unavailability_validation_api-cards-sileovirtualp
+
+2. F022  id22 Observed Target Unavailability (Possible Denial-of-Service)
+   Key:        (22, DELETE, /api/Addresss/{id}, "", validation)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   DELETE /api/Addresss/{__sileoVirtualParam1}   rule: validation
+   Detail:     DELETE http://localhost:8130/api/Addresss/'%22%3C%3E%60%5C%24%7B%7B%7B%25s()%5B%5D%7B%7D%7C%26%24*%2B%3D%3A%2C.%2F%3F!%40%5E~_-%25%20..%2F%2F....%5C%5C..%3B%23%09%0C%0D%0A%00ileo7ab takes localhost:8130 down. It was in flight when the application stopped answering, and once the application answered again it was sent once more with nothing else in flight, and the application dropped its connection (apiRequestContext.fetch: socket hang up) and stopped answering. The request carries a value the application never sent, so anyone able to send this single request can deny service to every one of its users. The scan sent it no more, so this endpoint's parameters went unprobed — which particular character it dies on is not covered by this scan.
+   Status:     baseline -  ->  trigger -
+   Trigger request:
+      DELETE http://localhost:8130/api/Addresss/'%22%3C%3E%60%5C%24%7B%7B%7B%25s()%5B%5D%7B%7D%7C%26%24*%2B%3D%3A%2C.%2F%3F!%40%5E~_-%25%20..%2F%2F....%5C%5C..%3B%23%09%0C%0D%0A%00ileo7ab
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F022_observed-target-unavailability_validation_api-addresss-sileovirtu
+
+3. F023  id22 Observed Target Unavailability (Possible Denial-of-Service)
+   Key:        (22, DELETE, /api/Cards/{id}, "", validation)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   DELETE /api/Cards/{__sileoVirtualParam1}   rule: validation
+   Detail:     DELETE http://localhost:8130/api/Cards/'%22%3C%3E%60%5C%24%7B%7B%7B%25s()%5B%5D%7B%7D%7C%26%24*%2B%3D%3A%2C.%2F%3F!%40%5E~_-%25%20..%2F%2F....%5C%5C..%3B%23%09%0C%0D%0A%00ileo7ab takes localhost:8130 down. It was in flight when the application stopped answering, and once the application answered again it was sent once more with nothing else in flight, and the application dropped its connection (apiRequestContext.fetch: socket hang up) and stopped answering. The request carries a value the application never sent, so anyone able to send this single request can deny service to every one of its users. The scan sent it no more, so this endpoint's parameters went unprobed — which particular character it dies on is not covered by this scan.
+   Status:     baseline -  ->  trigger -
+   Trigger request:
+      DELETE http://localhost:8130/api/Cards/'%22%3C%3E%60%5C%24%7B%7B%7B%25s()%5B%5D%7B%7D%7C%26%24*%2B%3D%3A%2C.%2F%3F!%40%5E~_-%25%20..%2F%2F....%5C%5C..%3B%23%09%0C%0D%0A%00ileo7ab
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F023_observed-target-unavailability_validation_api-cards-sileovirtualp
+
+4. F024  id22 Observed Target Unavailability (Possible Denial-of-Service)
+   Key:        (22, POST, /rest/basket/{id}/checkout, "", validation)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   POST /rest/basket/{__sileoVirtualParam1}/checkout   rule: validation
+   Detail:     POST http://localhost:8130/rest/basket/1/checkout takes localhost:8130 down. It was in flight when the application stopped answering, and once the application answered again it was sent once more with nothing else in flight, and the application stopped answering right after answering it. The request carries a value the application never sent, so anyone able to send this single request can deny service to every one of its users. The scan sent it no more, so this endpoint's parameters went unprobed — which particular character it dies on is not covered by this scan.
+   Status:     baseline -  ->  trigger -
+   Trigger request:
+      POST http://localhost:8130/rest/basket/1/checkout
+      content-type: application/json
+      
+      {"couponData":"cnVsbA==","orderDetails":{"paymentId":"wallet","addressId":"3","deliveryMethodId":"3"}}
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F024_observed-target-unavailability_validation_rest-basket-sileovirtua
+
+5. F025  id22 Observed Target Unavailability (Possible Denial-of-Service)
+   Key:        (22, PUT, /rest/wallet/balance, "", validation)
+   Severity:   Medium   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   PUT /rest/wallet/balance   rule: validation
+   Detail:     PUT http://localhost:8130/rest/wallet/balance takes localhost:8130 down. It was in flight when the application stopped answering, and once the application answered again it was sent once more with nothing else in flight, and the application dropped its connection (apiRequestContext.fetch: socket hang up) and stopped answering. The request carries a value the application never sent, so anyone able to send this single request can deny service to every one of its users. The scan sent it no more, so this endpoint's parameters went unprobed — which particular character it dies on is not covered by this scan.
+   Status:     baseline -  ->  trigger -
+   Trigger request:
+      PUT http://localhost:8130/rest/wallet/balance
+      content-type: application/json
+      
+      {"balance":123,"paymentId":"\u00007"}
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F025_observed-target-unavailability_validation_rest-wallet-balance
+
+====================================================================================================
+PART C — EXTRAS THIS RUN ALSO CARRIED (Informative; allowed, not required)
+====================================================================================================
+
+1. F031  id33 Application Validates or Escapes Special Characters (Input Handling Observed)
+   Key:        (33, PUT, /rest/wallet/balance, balance, A5)
+   Severity:   Informative   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   PUT /rest/wallet/balance   param: balance   rule: A5
+   Detail:     The application answered its own 4xx when this param carried these characters, so it validates them rather than mishandling them. The enforced type (integer) rejects any value carrying them as well, so no rule is written: \0 (NUL)
+   Status:     baseline 200  ->  trigger 404
+   Trigger request:
+      PUT http://localhost:8130/rest/wallet/balance
+      content-type: application/json
+      
+      {"balance":"1\u000023","paymentId":7}
+   Trigger response:
+      HTTP 404
+      {"status":"error"}
+   Evidence:   evidence/F031_application-validates-or-escap_A5_rest-wallet-balance
+
+2. F038  id50 Application Ends Its Own Process on a Request It Serves
+   Key:        (50, DELETE, /api/Addresss/{id}, "", validation)
+   Severity:   Informative   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   DELETE /api/Addresss/{__sileoVirtualParam1}   rule: validation
+   Detail:     DELETE http://localhost:8130/api/Addresss/3 takes localhost:8130 down, and it is a request the application's own feature makes — no value in it was changed. It was in flight when the application stopped answering, and once the application answered again it was sent once more with nothing else in flight, and the application dropped its connection (apiRequestContext.fetch: socket hang up) and stopped answering. This is a defect in the application rather than something an attacker supplies: it will end the process in normal use, for whoever was already going to send this request, and no content a sanitizer strips can stand in for it. NOT enforced, and nothing to enforce — refusing the request would remove the feature. The scan sent it no more, so this endpoint's parameters went unprobed.
+   Status:     baseline -  ->  trigger -
+   Trigger request:
+      DELETE http://localhost:8130/api/Addresss/3
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F038_application-ends-its-own-proce_validation_api-addresss-sileovirtu
+
+3. F039  id50 Application Ends Its Own Process on a Request It Serves
+   Key:        (50, POST, /rest/basket/{id}/checkout, "", validation)
+   Severity:   Informative   OWASP: A10:2025   Confidence: confirmed
+   Endpoint:   POST /rest/basket/{__sileoVirtualParam1}/checkout   rule: validation
+   Detail:     POST http://localhost:8130/rest/basket/1/checkout takes localhost:8130 down, and it is a request the application's own feature makes — no value in it was changed. It was in flight when the application stopped answering, and once the application answered again it was sent once more with nothing else in flight, and the application stopped answering right after answering it. This is a defect in the application rather than something an attacker supplies: it will end the process in normal use, for whoever was already going to send this request, and no content a sanitizer strips can stand in for it. NOT enforced, and nothing to enforce — refusing the request would remove the feature. The scan sent it no more, so this endpoint's parameters went unprobed.
+   Status:     baseline -  ->  trigger -
+   Trigger request:
+      POST http://localhost:8130/rest/basket/1/checkout
+      content-type: application/json
+      
+      {"couponData":"bnVsbA==","orderDetails":{"paymentId":"wallet","addressId":"3","deliveryMethodId":"3"}}
+   Trigger response:
+      (no response captured)
+   Evidence:   evidence/F039_application-ends-its-own-proce_validation_rest-basket-sileovirtua
